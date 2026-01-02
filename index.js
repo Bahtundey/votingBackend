@@ -24,7 +24,7 @@ const server = http.createServer(app);
 
 const io = require("socket.io")(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: "https://voting-fronted-wej6.vercel.app",
     credentials: true,
   },
 });
@@ -35,7 +35,7 @@ app.set("io", io);
 
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: "https://voting-fronted-wej6.vercel.app",
     credentials: true,
   })
 );
@@ -97,7 +97,7 @@ const PORT = process.env.PORT || 4000;
     }
 
     server.listen(PORT, () => {
-      console.log(` Server running at http://localhost:${PORT}`);
+      console.log(` Server running at https://voting-fronted-wej6.vercel.app:${PORT}`);
     });
   } catch (err) {
     console.error(" Server startup failed:", err);

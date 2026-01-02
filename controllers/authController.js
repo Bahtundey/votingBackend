@@ -90,7 +90,7 @@ async function registerUser(req, res) {
           </ul>
 
           <p>
-             <a href="http://localhost:5173/login">
+             <a href="https://voting-fronted-wej6.vercel.app/login">
               Login to VoteX
             </a>
           </p>
