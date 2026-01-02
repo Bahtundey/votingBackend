@@ -97,7 +97,7 @@ const PORT = process.env.PORT || 4000;
     }
 
     server.listen(PORT, () => {
-      console.log(` Server running at https://voting-fronted-wej6.vercel.app:${PORT}`);
+      console.log(` Server running at http://localhost:${PORT}`);
     });
   } catch (err) {
     console.error(" Server startup failed:", err);
