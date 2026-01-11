@@ -21,6 +21,7 @@ const allowedOrigins = [
   "http://localhost:5174",
   "http://localhost:3000",
   "https://voting-fronted-wej6.vercel.app",
+  "https://voting-fronted-wz3i.vercel.app"
 ];
 
 const corsOptions = {
