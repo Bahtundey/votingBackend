@@ -5,45 +5,46 @@ const cors = require("cors");
 const path = require("path");
 const connectDB = require("./config/db");
 
-
 const authRoutes = require("./routes/auth");
 const pollRoutes = require("./routes/polls");
 const contactRoutes = require("./routes/contact");
 const exportRoutes = require("./routes/export");
 const analyticsRoutes = require("./routes/analytics");
 
-
 const { schedulePollEnd } = require("./utils/scheduler");
 const Poll = require("./models/Poll");
-
-
 
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = [
+  "http://localhost:5174",
+  "http://localhost:3000",
+  "https://voting-fronted-wej6.vercel.app",
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
 
 const io = require("socket.io")(server, {
-  cors: {
-    origin: "https://voting-fronted-wej6.vercel.app",
-    credentials: true,
-  },
+  cors: corsOptions,
 });
-
 
 app.set("io", io);
 
-
-app.use(
-  cors({
-    origin: "https://voting-fronted-wej6.vercel.app",
-    credentials: true,
-  })
-);
-
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-
 
 app.use("/api/auth", authRoutes);
 app.use("/api/polls", pollRoutes);
@@ -52,16 +53,12 @@ app.use("/api/export", exportRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/user", require("./routes/user"));
 
-
-
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "Voting API running" });
 });
 
-
-
 io.on("connection", (socket) => {
-  console.log(" Client connected:", socket.id);
+  console.log("Client connected:", socket.id);
 
   socket.on("joinPoll", ({ pollId }) => {
     if (!pollId) return;
@@ -74,19 +71,17 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log(" Client disconnected:", socket.id);
+    console.log("Client disconnected:", socket.id);
   });
 });
-
 
 const PORT = process.env.PORT || 4000;
 
 (async function start() {
   try {
     await connectDB(process.env.MONGODB_URI);
-    console.log(" MongoDB Connected");
+    console.log("MongoDB Connected");
 
-    
     const openPolls = await Poll.find({
       isClosed: false,
       endsAt: { $exists: true },
@@ -97,10 +92,10 @@ const PORT = process.env.PORT || 4000;
     }
 
     server.listen(PORT, () => {
-      console.log(` Server running at http://localhost:${PORT}`);
+      console.log(`Server running on port ${PORT}`);
     });
   } catch (err) {
-    console.error(" Server startup failed:", err);
+    console.error("Server startup failed:", err);
     process.exit(1);
   }
 })();
