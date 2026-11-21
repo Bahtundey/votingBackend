@@ -4,25 +4,46 @@ const sendMail = require("./mailer");
 const timeouts = new Map();
 
 
+
 function schedulePollEnd(io, poll) {
   if (!poll || poll.isClosed) return;
 
   const end = new Date(poll.endsAt).getTime();
+
+  if (!Number.isFinite(end)) {
+    console.error("Invalid poll closing date:", poll.endsAt);
+    return;
+  }
+
   const delay = end - Date.now();
 
+  console.log("Poll scheduling diagnostic:", {
+    title: poll.title,
+    endsAt: poll.endsAt,
+    currentTime: new Date().toISOString(),
+    delayInMilliseconds: delay,
+  });
+
   if (delay <= 0) {
+    console.warn("Poll end date has already passed:", poll.title);
     closePoll(io, poll._id);
     return;
   }
 
   const key = poll._id.toString();
+
   if (timeouts.has(key)) {
     clearTimeout(timeouts.get(key));
   }
 
-  const timer = setTimeout(() => closePoll(io, poll._id), delay);
+  const timer = setTimeout(() => {
+    closePoll(io, poll._id);
+    timeouts.delete(key);
+  }, delay);
+
   timeouts.set(key, timer);
 }
+
 
 async function closePoll(io, pollId) {
   try {
