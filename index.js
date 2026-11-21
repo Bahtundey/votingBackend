@@ -11,8 +11,9 @@ const contactRoutes = require("./routes/contact");
 const exportRoutes = require("./routes/export");
 const analyticsRoutes = require("./routes/analytics");
 
-const { schedulePollEnd } = require("./utils/scheduler");
+const { schedulePoll } = require("./utils/scheduler");
 const Poll = require("./models/Poll");
+const { POLL_STATUS } = require("./models/Poll");
 
 const app = express();
 const server = http.createServer(app);
@@ -83,13 +84,13 @@ const PORT = process.env.PORT || 4000;
     await connectDB(process.env.MONGODB_URI);
     console.log("MongoDB Connected");
 
-    const openPolls = await Poll.find({
-      isClosed: false,
-      endsAt: { $exists: true },
+    // Reschedule open polls (auto-close) and scheduled drafts (auto-open).
+    const activePolls = await Poll.find({
+      status: { $in: [POLL_STATUS.DRAFT, POLL_STATUS.OPEN] },
     });
 
-    for (const poll of openPolls) {
-      schedulePollEnd(io, poll);
+    for (const poll of activePolls) {
+      schedulePoll(io, poll);
     }
 
     server.listen(PORT, () => {

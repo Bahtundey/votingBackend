@@ -1,83 +1,124 @@
 const Poll = require("../models/Poll");
+const { POLL_STATUS } = require("../models/Poll");
 const User = require("../models/User");
 const sendMail = require("../utils/mailer");
-const { schedulePollEnd, clearPollTimeout } = require("../utils/scheduler");
-
-
+const { parseDate } = require("../utils/dates");
+const { schedulePoll, clearPollTimers } = require("../utils/scheduler");
 
 exports.createPoll = async (req, res) => {
   try {
-    const { title, description, choices, endsAt } = req.body;
+    const { title, description, choices, endsAt, startsAt, status } = req.body;
 
     if (!title || !description || !Array.isArray(choices) || choices.length < 2) {
       return res.status(400).json({ error: "Invalid poll data" });
     }
 
-    const end = new Date(endsAt);
-    if (isNaN(end) || end <= new Date()) {
+    const now = Date.now();
+
+    const end = parseDate(endsAt);
+    if (!end) {
       return res.status(400).json({ error: "Invalid end date" });
     }
+    if (end.getTime() <= now) {
+      return res.status(400).json({ error: "End date must be in the future" });
+    }
+
+    let start = null;
+    if (startsAt !== undefined && startsAt !== null && startsAt !== "") {
+      start = parseDate(startsAt);
+      if (!start) {
+        return res.status(400).json({ error: "Invalid start date" });
+      }
+      if (end.getTime() <= start.getTime()) {
+        return res
+          .status(400)
+          .json({ error: "End date must be after the start date" });
+      }
+    }
+
+    // Resolve the initial status:
+    //  - explicit "draft"            -> draft (manual save, never auto-opens)
+    //  - future startsAt             -> draft, auto-opens at startsAt (scheduled)
+    //  - otherwise (default)         -> open (publish immediately)
+    const isManualDraft = status === POLL_STATUS.DRAFT;
+    const isScheduled = !isManualDraft && start && start.getTime() > now;
+
+    let finalStatus;
+    if (isManualDraft) {
+      finalStatus = POLL_STATUS.DRAFT;
+    } else if (isScheduled) {
+      finalStatus = POLL_STATUS.DRAFT;
+    } else {
+      finalStatus = POLL_STATUS.OPEN;
+    }
+
+    const finalStartsAt = isManualDraft
+      ? new Date(now)
+      : isScheduled
+        ? start
+        : start || new Date(now);
 
     const poll = await Poll.create({
       title,
       description,
       choices: choices.map((c) => ({ text: c.text })),
       createdBy: req.user.id,
+      startsAt: finalStartsAt,
       endsAt: end,
+      status: finalStatus,
     });
 
+    schedulePoll(req.app.get("io"), poll);
 
-    schedulePollEnd(req.app.get("io"), poll);
+    // Only announce polls that are actually available for voting.
+    if (poll.status === POLL_STATUS.OPEN) {
+      const users = await User.find({ role: "user" }).select("email name");
 
-    
-    const users = await User.find({ role: "user" }).select("email name");
+      for (const u of users) {
+        const html = `
+          <h2>🗳️ New Poll Available!</h2>
+          <p>Hello ${u.name},</p>
 
-    for (const u of users) {
-      const html = `
-        <h2>🗳️ New Poll Available!</h2>
-        <p>Hello ${u.name},</p>
+          <p>A new poll titled <strong>${poll.title}</strong> has been created.</p>
 
-        <p>A new poll titled <strong>${poll.title}</strong> has been created.</p>
+          <p>${poll.description}</p>
 
-        <p>${poll.description}</p>
+          <p><strong>Poll Ends:</strong> ${new Date(poll.endsAt).toLocaleString()}</p>
 
-        <p><strong>Poll Ends:</strong> ${new Date(poll.endsAt).toLocaleString()}</p>
+          <p>Log in to <strong>VoteX</strong> to participate.</p>
 
-        <p>Log in to <strong>VoteX</strong> to participate.</p>
+          <hr />
+          <p style="font-size:12px;color:#777">
+            You are receiving this email because you have an account on VoteX.
+          </p>
+        `;
 
-        <hr />
-        <p style="font-size:12px;color:#777">
-          You are receiving this email because you have an account on VoteX.
-        </p>
-      `;
-
-      
-      sendMail(u.email, "🗳️ New Poll Created", html);
+        sendMail(u.email, "🗳️ New Poll Created", html);
+      }
     }
 
-    
-if (process.env.ADMIN_EMAIL) {
-  const adminHtml = `
-    <h2>🛠️ New Poll Created</h2>
+    if (process.env.ADMIN_EMAIL) {
+      const adminHtml = `
+        <h2>🛠️ New Poll Created</h2>
 
-    <p>A new poll has been created by an admin.</p>
+        <p>A new poll has been created by an admin.</p>
 
-    <ul>
-      <li><strong>Title:</strong> ${poll.title}</li>
-      <li><strong>Description:</strong> ${poll.description}</li>
-      <li><strong>Ends At:</strong> ${new Date(poll.endsAt).toLocaleString()}</li>
-    </ul>
+        <ul>
+          <li><strong>Title:</strong> ${poll.title}</li>
+          <li><strong>Description:</strong> ${poll.description}</li>
+          <li><strong>Status:</strong> ${poll.status}</li>
+          <li><strong>Ends At:</strong> ${new Date(poll.endsAt).toLocaleString()}</li>
+        </ul>
 
-    <p>Login to the Admin Dashboard to manage this poll.</p>
-  `;
+        <p>Login to the Admin Dashboard to manage this poll.</p>
+      `;
 
-  sendMail(
-    process.env.ADMIN_EMAIL,
-    `🛠️ New Poll Created: ${poll.title}`,
-    adminHtml
-  );
-}
-
+      sendMail(
+        process.env.ADMIN_EMAIL,
+        `🛠️ New Poll Created: ${poll.title}`,
+        adminHtml
+      );
+    }
 
     res.status(201).json({ ok: true, poll });
   } catch (err) {
@@ -85,10 +126,6 @@ if (process.env.ADMIN_EMAIL) {
     res.status(500).json({ error: "Failed to create poll" });
   }
 };
-
-
-
-
 
 exports.getPolls = async (req, res) => {
   try {
@@ -113,36 +150,54 @@ exports.getPolls = async (req, res) => {
   }
 };
 
-
 exports.getActivePolls = async (req, res) => {
-  const polls = await Poll.find({
-    isClosed: false,
-    endsAt: { $gt: new Date() },
-  }).sort({ createdAt: -1 });
+  try {
+    const now = new Date();
 
-  res.json({ polls });
+    const polls = await Poll.find({
+      status: POLL_STATUS.OPEN,
+      startsAt: { $lte: now },
+      endsAt: { $gt: now },
+    }).sort({ createdAt: -1 });
+
+    res.json({ polls });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load polls" });
+  }
 };
-
 
 exports.getHistoryPolls = async (req, res) => {
-  const polls = await Poll.find({
-    endsAt: { $lte: new Date() },
-  }).sort({ createdAt: -1 });
+  try {
+    const now = new Date();
 
-  res.json({ polls });
+    const polls = await Poll.find({
+      status: { $ne: POLL_STATUS.DRAFT },
+      $or: [
+        { status: POLL_STATUS.CLOSED },
+        { endsAt: { $lte: now } },
+      ],
+    }).sort({ createdAt: -1 });
+
+    res.json({ polls });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load poll history" });
+  }
 };
-
 
 exports.getPollById = async (req, res) => {
-  const poll = await Poll.findById(req.params.id)
-    .populate("votes.user", "name email");
+  try {
+    const poll = await Poll.findById(req.params.id).populate(
+      "votes.user",
+      "name email"
+    );
 
-  if (!poll) return res.status(404).json({ error: "Poll not found" });
+    if (!poll) return res.status(404).json({ error: "Poll not found" });
 
-  res.json({ poll });
+    res.json({ poll });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load poll" });
+  }
 };
-
-
 
 exports.votePoll = async (req, res) => {
   try {
@@ -151,7 +206,24 @@ exports.votePoll = async (req, res) => {
 
     const poll = await Poll.findById(req.params.id);
     if (!poll) return res.status(404).json({ error: "Poll not found" });
-    if (poll.isClosed) return res.status(400).json({ error: "Poll closed" });
+
+    const now = Date.now();
+
+    if (poll.status === POLL_STATUS.DRAFT) {
+      return res.status(400).json({ error: "Poll is not available yet" });
+    }
+    if (poll.status === POLL_STATUS.CLOSED) {
+      return res.status(400).json({ error: "Poll closed" });
+    }
+
+    if (new Date(poll.startsAt).getTime() > now) {
+      return res.status(400).json({ error: "Poll has not opened yet" });
+    }
+    if (new Date(poll.endsAt).getTime() <= now) {
+      poll.status = POLL_STATUS.CLOSED;
+      await poll.save();
+      return res.status(400).json({ error: "Poll closed" });
+    }
 
     if (
       typeof choiceIndex !== "number" ||
@@ -165,11 +237,9 @@ exports.votePoll = async (req, res) => {
       return res.status(400).json({ error: "You already voted" });
     }
 
-    
     poll.votes.push({ user: userId, choiceIndex });
     await poll.save();
 
-    
     const user = await User.findByIdAndUpdate(
       userId,
       {
@@ -183,7 +253,6 @@ exports.votePoll = async (req, res) => {
       { new: true }
     );
 
-    
     const html = `
       <h2> Vote Confirmed</h2>
 
@@ -204,13 +273,15 @@ exports.votePoll = async (req, res) => {
 
     sendMail(user.email, " Vote Confirmed", html);
 
-    
     const io = req.app.get("io");
     if (io) {
       const results = poll.choices.map(
         (_, i) => poll.votes.filter((v) => v.choiceIndex === i).length
       );
-      io.to(poll._id.toString()).emit("voteUpdate", results);
+      io.to(poll._id.toString()).emit("voteUpdate", {
+        pollId: poll._id.toString(),
+        results,
+      });
     }
 
     res.json({ ok: true });
@@ -220,7 +291,6 @@ exports.votePoll = async (req, res) => {
   }
 };
 
-
 /* ======================
    UPDATE POLL
 ====================== */
@@ -229,31 +299,62 @@ exports.updatePoll = async (req, res) => {
     const poll = await Poll.findById(req.params.id);
     if (!poll) return res.status(404).json({ error: "Poll not found" });
 
-    const { title, description, endsAt } = req.body;
+    const { title, description, choices, endsAt, startsAt, status } = req.body;
 
     if (title) poll.title = title;
     if (description) poll.description = description;
 
-    if (endsAt) {
-      const date = new Date(endsAt);
-      if (isNaN(date) || date <= new Date()) {
+    if (Array.isArray(choices) && choices.length >= 2) {
+      poll.choices = choices.map((c) => ({ text: c.text }));
+    }
+
+    if (startsAt !== undefined) {
+      const start = startsAt ? parseDate(startsAt) : null;
+      if (startsAt && !start) {
+        return res.status(400).json({ error: "Invalid start date" });
+      }
+      poll.startsAt = start || new Date();
+    }
+
+    if (endsAt !== undefined && endsAt !== null && endsAt !== "") {
+      const end = parseDate(endsAt);
+      if (!end) {
         return res.status(400).json({ error: "Invalid end date" });
       }
+      poll.endsAt = end;
+    }
 
-      poll.endsAt = date;
-      clearPollTimeout(poll._id);
-      schedulePollEnd(req.app.get("io"), poll);
+    if (poll.endsAt && poll.endsAt.getTime() <= poll.startsAt.getTime()) {
+      return res.status(400).json({ error: "End date must be after the start date" });
+    }
+
+    if (status !== undefined) {
+      if (!Object.values(POLL_STATUS).includes(status)) {
+        return res.status(400).json({ error: "Invalid status" });
+      }
+      poll.status = status;
     }
 
     await poll.save();
+
+    clearPollTimers(poll._id);
+    schedulePoll(req.app.get("io"), poll);
+
     res.json({ ok: true, poll });
   } catch (err) {
+    console.error("UPDATE POLL ERROR:", err);
     res.status(500).json({ error: "Update failed" });
   }
 };
 
-
 exports.deletePoll = async (req, res) => {
-  await Poll.findByIdAndDelete(req.params.id);
-  res.json({ ok: true });
+  try {
+    const poll = await Poll.findByIdAndDelete(req.params.id);
+    if (!poll) return res.status(404).json({ error: "Poll not found" });
+
+    clearPollTimers(poll._id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Delete failed" });
+  }
 };
